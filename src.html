@@ -481,7 +481,7 @@ p, h1, dl, dd { margin: 0; }
   const strokes = new Map();
 
   /* ---------- 音 ---------- */
-  let ctx = null, master = null, noise = null, voices = null, lastVoice = -1, wokeAt = 0, queued = 0;
+  let ctx = null, master = null, noise = null, voices = null, lastVoice = null, wokeAt = 0, queued = 0;
 
   // iPhone / iPad は、消音モードだと Web Audio を鳴らさない。
   // 音を「あり」にしている間だけ再生用の扱いに切り替えて、消音モードでも鳴るようにする（iOS 17 以降）。
@@ -512,9 +512,10 @@ p, h1, dl, dd { margin: 0; }
         noise = ctx.createBuffer(1, len, ctx.sampleRate);
         const d = noise.getChannelData(0);
         for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
-        voices = { small: [], big: [] };
-        addVoice(false);
-        addVoice(false);
+        voices = {};
+        for (const kind of Object.keys(VOICE_PLAN)) voices[kind] = [];
+        addVoice('puchi');
+        addVoice('puchi');
         setTimeout(fillVoices, 30);
       }
       if (ctx.state !== 'running') {
@@ -540,11 +541,73 @@ p, h1, dl, dd { margin: 0; }
   // 粒が潰れる音を、録音を使わずに計算で作る。
   // 実物の気泡シートの音は、0.3ミリ秒もかからず立ち上がる鋭い破裂で、1〜2ミリ秒でほぼ鳴り終わり、
   // そのあと部屋の響きとフィルムの名残が 0.1 秒ほど小さく続く。成分は 2〜12kHz が中心で、500Hz より下はほとんどない。
-  // これに合わせて「破裂」「近くの面からの跳ね返り」「名残」を重ねる。big は粒の大きいシートの、低めで太い音。
+  // これに合わせて「破裂」「近くの面からの跳ね返り」「名残」を重ねる。
+  //
+  // 実物の音は粒ごとにかなり違うので、音の種類を分けて作る。数字はどれも [下限, 上限] で、作るたびにその間から選ぶ。
+  // quick・slow・pulse・fade・again・air・thumpFor はミリ秒、floor・ceil・cap・body・core・thumpAt は Hz、
+  // bodyBy・coreBy・dip・bounce・tail・againBy は dB、linger と thump は破裂に対する割合。
+  const POP_KINDS = {
+    // プチッ: いちばん普通の音
+    puchi: {
+      quick: [0.3, 0.5], slow: [1.5, 2.3], linger: [0.6, 0.9], pulse: [0.08, 0.16],
+      floor: [450, 800], ceil: [6000, 12000], cap: 16000,
+      body: [800, 1050], bodyBy: [1, 4], core: [3400, 4600], coreBy: [1.5, 4], dip: [-5, -2],
+      bounce: [-14, -9], tail: [-23, -19], fade: [30, 38],
+    },
+    // パチッ: 高く乾いた音。よく張った粒
+    pachi: {
+      quick: [0.2, 0.35], slow: [1.0, 1.6], linger: [0.4, 0.65], pulse: [0.06, 0.12],
+      floor: [900, 1500], ceil: [14000, 20000], cap: 18000,
+      body: [850, 1100], bodyBy: [-1, 2], core: [5500, 8500], coreBy: [3, 5.5], dip: [-6, -3],
+      bounce: [-16, -11], tail: [-25, -21], fade: [26, 34],
+    },
+    // ポコッ: 低く丸い音。空気の多い粒
+    poko: {
+      quick: [0.45, 0.8], slow: [2.0, 3.0], linger: [0.7, 1.0], pulse: [0.15, 0.3],
+      floor: [120, 250], ceil: [3000, 4500], cap: 12000,
+      body: [900, 1300], bodyBy: [2, 5], core: [3000, 4000], coreBy: [1.5, 4], dip: [-3, -1],
+      bounce: [-14, -9], tail: [-24, -20], fade: [28, 36],
+      thump: [0.08, 0.18], thumpAt: [250, 400], thumpFor: 4,
+    },
+    // パチパチッ: 二段に分かれて潰れる
+    niren: {
+      quick: [0.3, 0.5], slow: [1.3, 2.0], linger: [0.5, 0.8], pulse: [0.08, 0.16],
+      floor: [450, 800], ceil: [6000, 12000], cap: 16000,
+      body: [800, 1050], bodyBy: [1, 4], core: [3400, 4600], coreBy: [1.5, 4], dip: [-5, -2],
+      bounce: [-15, -10], tail: [-24, -20], fade: [28, 36],
+      again: [14, 32], againBy: [-6, -1],
+    },
+    // プスッ: 弾けずに空気だけ抜ける、気の抜けた音
+    pusu: {
+      quick: [0.3, 0.5], slow: [1.5, 2.3], linger: [0.6, 0.9], pulse: [0.1, 0.2],
+      floor: [600, 1000], ceil: [4500, 7500], cap: 14000,
+      body: [800, 1050], bodyBy: [0, 2], core: [2800, 4000], coreBy: [2, 4], dip: [-3, -1],
+      bounce: [-16, -11], tail: [-18, -14], fade: [24, 32],
+      air: [5, 10],
+    },
+    // パンッ: 金の粒。大きい粒が勢いよく弾ける
+    pan: {
+      quick: [0.4, 0.7], slow: [1.6, 2.6], linger: [0.5, 0.8], pulse: [0.15, 0.3],
+      floor: [600, 1000], ceil: [7000, 11000], cap: 14000,
+      body: [1050, 1400], bodyBy: [-2, 0], core: [3100, 4200], coreBy: [4, 6.5], dip: [-3, -1],
+      bounce: [-14, -9], tail: [-23, -19], fade: [30, 38],
+      thump: [0.03, 0.08], thumpAt: [280, 420], thumpFor: 4,
+    },
+    // ボンッ: 金の粒。低く太く響く
+    bon: {
+      quick: [0.5, 0.9], slow: [2.6, 3.8], linger: [0.7, 1.0], pulse: [0.2, 0.4],
+      floor: [150, 300], ceil: [3200, 4800], cap: 11000,
+      body: [500, 800], bodyBy: [4, 7], core: [2400, 3400], coreBy: [2, 4], dip: [-2, 0],
+      bounce: [-13, -8], tail: [-21, -17], fade: [36, 48],
+      thump: [0.15, 0.3], thumpAt: [180, 260], thumpFor: 7,
+    },
+  };
   // rnd は 0〜1 の乱数を返す関数。呼ぶたびに少しずつ違う音になる。
-  function synthPop(sr, rnd, big) {
-    const n = Math.floor(sr * 0.14);
+  function synthPop(sr, rnd, kind) {
+    const k = POP_KINDS[kind] || POP_KINDS.puchi;
+    const n = Math.floor(sr * 0.17);
     const between = (a, b) => a + (b - a) * rnd();
+    const pick = range => range[0] + (range[1] - range[0]) * rnd();
     const gain = dB => Math.pow(10, dB / 20);
     const hiss = () => rnd() * 2 - 1;
     const top = sr * 0.45;
@@ -588,15 +651,14 @@ p, h1, dl, dd { margin: 0; }
       for (let i = 0; i < x.length; i++) { y += b * (x[i] - y); x[i] = y; }
     }
 
-    // この粒の音色。実物は 1〜5kHz がほぼ平らで、その下と上がなだらかに落ちる。大きい粒は低い側まで平らで、上が早く落ちる
+    // この粒の音色。実物は 1〜5kHz がほぼ平らで、その下と上がなだらかに落ちる。明るい粒ほど、下も上も高い側へ寄る
     const bright = rnd();
-    const floor = big ? between(200, 600) : 450 + 350 * bright;
-    const ceil = big ? between(5000, 7500) : 6000 + 6000 * bright;
-    const cap = big ? between(12000, 15000) : 16000;
+    const floor = k.floor[0] + (k.floor[1] - k.floor[0]) * bright;
+    const ceil = k.ceil[0] + (k.ceil[1] - k.ceil[0]) * bright;
     const quirks = [
-      [big ? between(1050, 1400) : between(800, 1050), between(2, 3), big ? between(-1, 1) : between(1, 4)],            // 胴鳴り
-      [between(1600, 2400), between(0.9, 1.4), big ? between(-3, -1) : between(-5, -2)],                               // 中域のくぼみ
-      [big ? between(3100, 4200) : between(3400, 4600), between(1.2, 2), big ? between(4, 6.5) : between(1.5, 4)],     // 芯
+      [pick(k.body), between(2, 3), pick(k.bodyBy)],                          // 胴鳴り
+      [between(1600, 2400), between(0.9, 1.4), pick(k.dip)],                  // 中域のくぼみ
+      [pick(k.core), between(1.2, 2), pick(k.coreBy)],                        // 芯
       [1200 * Math.pow(10000 / 1200, rnd()), between(2, 4), between(-4, 4)],  // 粒ごとのくせ
       [1200 * Math.pow(10000 / 1200, rnd()), between(2, 4), between(-4, 4)],
     ];
@@ -605,26 +667,39 @@ p, h1, dl, dd { margin: 0; }
       tilt(x, floor);
       soften(x, ceil * (dull ? 0.7 : 1));
       for (const [f, q, g] of quirks) biquad(x, 'peak', f, q, g);
-      biquad(x, 'low', cap, 0.6);
+      biquad(x, 'low', k.cap, 0.6);
     }
 
-    // 破裂: 圧力の山と戻り、それに重なるごく短い雑音。雑音は一瞬で落ちる分と、1〜2ミリ秒かけて落ちる分の二段
-    const click = new Float32Array(n);
-    const quick = sr * (big ? between(0.0004, 0.0007) : between(0.0003, 0.0005));
-    const slow = sr * (big ? between(0.0016, 0.0026) : between(0.0015, 0.0023));
-    const linger = big ? between(0.5, 0.8) : between(0.6, 0.9);
-    const up = Math.max(2, Math.round(sr * (big ? between(0.00015, 0.0003) : between(0.00008, 0.00016))));
-    for (let i = 0; i < up; i++) click[i] += Math.sin(Math.PI * (i + 0.5) / up);
-    for (let i = 0; i < up * 2; i++) click[up + i] -= 0.45 * Math.sin(Math.PI * (i + 0.5) / (up * 2));
-    const grit = between(0.7, 1.1);
-    for (let i = 0; i < n && i < slow * 12; i++) click[i] += grit * hiss() * (Math.exp(-i / quick) + linger * Math.exp(-i / slow));
-    voice(click, false);
+    // 破裂をひとつ作る: 圧力の山と戻り、それに重なるごく短い雑音。
+    // 雑音は一瞬で落ちる分と、1〜2ミリ秒かけて落ちる分の二段。気の抜けた音だけは、山がほとんどなく、空気の音がゆっくり立ち上がる
+    function burst() {
+      const x = new Float32Array(n);
+      const up = Math.max(2, Math.round(sr * pick(k.pulse) / 1000));
+      const snap = k.air ? 0.25 : 1;
+      for (let i = 0; i < up; i++) x[i] += snap * Math.sin(Math.PI * (i + 0.5) / up);
+      for (let i = 0; i < up * 2; i++) x[up + i] -= snap * 0.45 * Math.sin(Math.PI * (i + 0.5) / (up * 2));
+      const grit = between(0.7, 1.1);
+      if (k.air) {
+        const rise = sr * between(0.5, 1.2) / 1000, fall = sr * pick(k.air) / 1000;
+        for (let i = 0; i < n && i < fall * 10; i++) x[i] += grit * hiss() * (1 - Math.exp(-i / rise)) * Math.exp(-i / fall);
+      } else {
+        const quick = sr * pick(k.quick) / 1000, slow = sr * pick(k.slow) / 1000, linger = pick(k.linger);
+        for (let i = 0; i < n && i < slow * 12; i++) x[i] += grit * hiss() * (Math.exp(-i / quick) + linger * Math.exp(-i / slow));
+      }
+      voice(x, false);
+      return x;
+    }
+    const click = burst();
+    if (k.again) {
+      const second = burst(), d = Math.round(sr * pick(k.again) / 1000), g = gain(pick(k.againBy));
+      for (let i = 0; i + d < n; i++) click[i + d] += g * second[i];
+    }
     const out = Float32Array.from(click);
 
     // 近くの面からの跳ね返りを2つ
     const bounces = [
-      [between(0.003, 0.0065), between(-14, -9), between(5000, 8000)],
-      [between(0.009, 0.016), between(-21, -16), between(3500, 6000)],
+      [between(0.003, 0.0065), pick(k.bounce), between(5000, 8000)],
+      [between(0.009, 0.016), pick(k.bounce) - 7, between(3500, 6000)],
     ];
     for (const [late, level, soft] of bounces) {
       const echo = Float32Array.from(click);
@@ -635,7 +710,7 @@ p, h1, dl, dd { margin: 0; }
 
     // 名残: 部屋の響きと、フィルムが戻るときのかすかなパリッ
     const tail = new Float32Array(n);
-    const fade = between(0.03, 0.038), from = Math.round(sr * 0.0015);
+    const fade = pick(k.fade) / 1000, from = Math.round(sr * 0.0015);
     for (let i = from; i < n; i++) {
       const t = (i - from) / sr;
       tail[i] = hiss() * Math.exp(-t / fade) * (1 - Math.exp(-t / 0.002));
@@ -646,13 +721,15 @@ p, h1, dl, dd { margin: 0; }
       for (let k = 0; k < sr * 0.002 && at + k < n; k++) tail[at + k] += size * hiss() * Math.exp(-k / (sr * 0.0003));
     }
     voice(tail, true);
-    const share = rms(click, 0, 0.001) * gain(between(-23, -19)) / Math.max(1e-9, rms(tail, 0.004, 0.008));
+    let loud = 0;
+    for (let t = 0; t < 0.02; t += 0.001) loud = Math.max(loud, rms(click, t, t + 0.001));
+    const share = loud * gain(pick(k.tail)) / Math.max(1e-9, rms(tail, 0.004, 0.008));
     for (let i = 0; i < n; i++) out[i] += share * tail[i];
 
-    // 大きい粒は、空気の抜ける低い「ポ」がわずかに混じる
-    if (big) {
-      const f = between(280, 420), amp = between(0.05, 0.12) * peakOf(click);
-      for (let i = 0; i < n && i < sr * 0.03; i++) out[i] += amp * Math.sin(2 * Math.PI * f * i / sr) * Math.exp(-i / (sr * 0.004));
+    // 低い音の種類には、空気の抜ける「ポ」を混ぜる
+    if (k.thump) {
+      const f = pick(k.thumpAt), amp = pick(k.thump) * peakOf(click), last = sr * k.thumpFor / 1000;
+      for (let i = 0; i < n && i < last * 8; i++) out[i] += amp * Math.sin(2 * Math.PI * f * i / sr) * Math.exp(-i / last);
     }
 
     const peak = peakOf(out), end = Math.round(sr * 0.006);
@@ -661,40 +738,54 @@ p, h1, dl, dd { margin: 0; }
   }
   /* POP-SYNTH-END */
 
-  // 開くたびに違う音を何種類か作っておき、潰すたびにその中から選ぶ。
+  // 開くたびに違う音を作っておき、潰すたびにその中から選ぶ。数字は種類ごとに用意する数。
   // 最初の1音を待たせないよう、はじめは少しだけ作り、残りは合間に足していく
-  function addVoice(big) {
-    const data = synthPop(ctx.sampleRate, Math.random, big);
+  const VOICE_PLAN = { puchi: 6, pan: 3, pachi: 4, poko: 4, niren: 3, pusu: 3, bon: 2 };
+  // 鳴らす大きさ。同じ山の高さでも長く鳴る音ほど大きく聞こえるので、聞こえ方が揃うように測って決めた。
+  // そのうえで金の粒（pan・bon）は少し大きく、気の抜けた音（pusu）は小さくしてある
+  const VOICE_LEVEL = { puchi: 0.81, pan: 0.92, pachi: 1, poko: 0.59, niren: 0.86, pusu: 0.16, bon: 0.72 };
+  function addVoice(kind) {
+    const data = synthPop(ctx.sampleRate, Math.random, kind);
     const buf = ctx.createBuffer(1, data.length, ctx.sampleRate);
     buf.getChannelData(0).set(data);
-    (big ? voices.big : voices.small).push(buf);
+    voices[kind].push(buf);
   }
   function fillVoices() {
     if (!ctx || !voices) return;
     try {
-      if (voices.big.length < 1) addVoice(true);
-      else if (voices.small.length < 12) addVoice(false);
-      else if (voices.big.length < 4) addVoice(true);
-      else return;
+      // まず全種類をひとつずつ、そのあと予定の数まで
+      const kinds = Object.keys(VOICE_PLAN);
+      const next = kinds.find(kind => voices[kind].length < 1) || kinds.find(kind => voices[kind].length < VOICE_PLAN[kind]);
+      if (!next) return;
+      addVoice(next);
       setTimeout(fillVoices, 30);
     } catch (e) {
       console.debug('音を作り足せませんでした', e);
     }
   }
 
+  // 潰すたびに音の種類を選ぶ。ふつうの粒はプチッが多めで、たまに二段や気の抜けた音が混じる。金の粒はパンッかボンッ
+  function chooseKind(gold) {
+    const roll = Math.random();
+    if (gold) return roll < 0.6 ? 'pan' : 'bon';
+    return roll < 0.44 ? 'puchi' : roll < 0.66 ? 'pachi' : roll < 0.84 ? 'poko' : roll < 0.93 ? 'niren' : 'pusu';
+  }
+
   function popSound(i, soft) {
     if (!audible() || !voices) return;
     try {
-      const gold = state.special.includes(i) && voices.big.length > 0;
-      const list = gold ? voices.big : voices.small;
-      let k = Math.floor(Math.random() * list.length);
-      if (k === lastVoice) k = (k + 1) % list.length;
-      lastVoice = k;
+      const gold = state.special.includes(i);
+      let kind = chooseKind(gold);
+      if (!voices[kind].length) kind = gold && voices.pan.length ? 'pan' : 'puchi';   // まだ作り終えていない種類は、あるもので代える
+      const list = voices[kind];
+      let buf = list[Math.floor(Math.random() * list.length)];
+      if (buf === lastVoice && list.length > 1) buf = list[(list.indexOf(buf) + 1) % list.length];
+      lastVoice = buf;
       const src = ctx.createBufferSource();
-      src.buffer = list[k];
-      src.playbackRate.value = 0.93 + Math.random() * 0.14;
+      src.buffer = buf;
+      src.playbackRate.value = 0.94 + Math.random() * 0.12;
       const g = ctx.createGain();
-      g.gain.value = (gold ? 1 : soft ? 0.5 : 0.85) * (0.8 + Math.random() * 0.2);
+      g.gain.value = VOICE_LEVEL[kind] * (soft && !gold ? 0.6 : 1) * (0.82 + Math.random() * 0.18);
       src.connect(g);
       if (ctx.createStereoPanner) {
         const pan = ctx.createStereoPanner();
@@ -825,14 +916,14 @@ p, h1, dl, dd { margin: 0; }
 
   const gap = (i, j) => Math.hypot(pos[i].ux - pos[j].ux, pos[i].uy - pos[j].uy);
 
+  // 金の粒は1枚に1〜5個。数も場所もシートごとに変わる（2〜3個が出やすく、5個はまれ）。
+  // 近くに並ぶこともあり、そのときは片方を潰すともう片方も連なって弾ける
   function pickSpecial() {
-    const a = Math.floor(Math.random() * N);
-    let b = a;
-    for (let tries = 0; tries < 80; tries++) {
-      const k = Math.floor(Math.random() * N);
-      if (gap(a, k) >= 4.5) { b = k; break; }
-    }
-    return b === a ? [a] : [a, b];
+    const roll = Math.random();
+    const count = roll < 0.22 ? 1 : roll < 0.52 ? 2 : roll < 0.77 ? 3 : roll < 0.92 ? 4 : 5;
+    const picked = new Set();
+    while (picked.size < count) picked.add(Math.floor(Math.random() * N));
+    return [...picked];
   }
 
   // state の中身をそのまま画面に写す
