@@ -481,7 +481,21 @@ p, h1, dl, dd { margin: 0; }
   const strokes = new Map();
 
   /* ---------- 音 ---------- */
-  let ctx = null, master = null, noise = null, wokeAt = 0;
+  let ctx = null, master = null, noise = null, wokeAt = 0, queued = 0;
+
+  // iPhone / iPad は、消音モードだと Web Audio を鳴らさない。
+  // 音を「あり」にしている間だけ再生用の扱いに切り替えて、消音モードでも鳴るようにする（iOS 17 以降）。
+  // 引き換えに、ほかのアプリで流している音楽は止まる。
+  const appleTouch = /iP(hone|ad|od)/.test(navigator.userAgent) ||
+    (navigator.platform === 'MacIntel' && navigator.maxTouchPoints > 1);
+  function tuneSession() {
+    if (!appleTouch || !navigator.audioSession) return;
+    try {
+      navigator.audioSession.type = state.sound ? 'playback' : 'auto';
+    } catch (e) {
+      console.debug('音の出し方を切り替えられませんでした', e);
+    }
+  }
 
   // 音は必ず操作のなかで起こす。断られたら黙って続ける
   function wake() {
@@ -509,7 +523,13 @@ p, h1, dl, dd { margin: 0; }
       ctx = null;
     }
   }
-  const audible = () => state.sound && ctx && (ctx.state === 'running' || performance.now() - wokeAt < 250);
+  // 鳴らせる状態か。起こしている最中（指を離すまで）は1音だけ予約して、あとでまとめて鳴るのを防ぐ
+  function audible() {
+    if (!state.sound || !ctx) return false;
+    if (ctx.state === 'running') { queued = 0; return true; }
+    if (performance.now() - wokeAt < 250 && queued < 1) { queued++; return true; }
+    return false;
+  }
 
   function popSound(i, soft) {
     if (!audible()) return;
@@ -907,6 +927,7 @@ p, h1, dl, dd { margin: 0; }
     btnSound.addEventListener('click', () => {
       state.sound = !state.sound;
       syncSound();
+      tuneSession();
       if (state.sound) {
         wake();
       } else if (ctx && ctx.state === 'running') {
@@ -926,8 +947,23 @@ p, h1, dl, dd { margin: 0; }
       if (busy) nextSheet(); else newSheet(true);
     });
 
+    // iPhone は指を離した瞬間にしか音を起こせないことがあるので、そこでも起こす
+    document.addEventListener('touchend', wake, { passive: true });
+    document.addEventListener('click', wake);
+
     window.addEventListener('pagehide', flush);
-    document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+    // 画面を離れている間は音の出口を閉じておく（ほかのアプリの音を邪魔しない）。戻ったら起こし直す
+    document.addEventListener('visibilitychange', () => {
+      if (document.hidden) {
+        flush();
+        if (ctx && ctx.state === 'running') {
+          const p = ctx.suspend();
+          if (p && p.catch) p.catch(() => {});
+        }
+      } else if (ctx) {
+        wake();
+      }
+    });
   }
 
   /* ---------- はじまり ---------- */
@@ -958,6 +994,7 @@ p, h1, dl, dd { margin: 0; }
     layout();
     if (resume) paint(false); else newSheet(false);
     syncSound();
+    tuneSession();
     bind();
   }
 
