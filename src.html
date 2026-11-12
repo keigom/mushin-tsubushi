@@ -1,0 +1,971 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="color-scheme" content="dark">
+<meta name="theme-color" content="#0d1321">
+<title>無心つぶし</title>
+<meta name="description" content="考えない、つぶすだけ。気泡シートの粒を百八つ、ひたすら潰すゲームです。">
+<meta property="og:type" content="website">
+<meta property="og:title" content="無心つぶし">
+<meta property="og:description" content="考えない、つぶすだけ。気泡シートの粒を百八つ、ひたすら潰すゲームです。">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='5' fill='%23df4a2d'/%3E%3Ccircle cx='16' cy='16' r='8' fill='none' stroke='%23ece7da' stroke-width='3.5'/%3E%3C/svg%3E">
+<!-- 画面に出す文字だけを取り寄せている。文言を変えたら build.py を通して text= を作り直すこと。 -->
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Shippori+Mincho+B1:wght@800&amp;family=Zen+Kaku+Gothic+New:wght@500&amp;display=swap&amp;text=__GLYPHS__">
+<style>
+:root {
+  /* 設計: 夜の本堂。藍の地に生成りの文字、朱は印ひとつ。広い画面は左に縦書きの柱を立て、残りを全部シートに使う。 */
+  --yoru: #0d1321;
+  --ai: #1b2740;
+  --kinari: #ece7da;
+  --nezu: #9098ab;
+  --shu: #df4a2d;
+  --kin: #e3bb62;
+  --hair: rgba(236, 231, 218, .16);
+
+  /* シートの下に敷く布。張り替えるたびに 藍・松葉・小豆・紫紺・鉄・柿渋 と変わる */
+  --nuno-1: #1b3a30;
+  --nuno-2: #45252e;
+  --nuno-3: #2e2447;
+  --nuno-4: #1c3943;
+  --nuno-5: #44301e;
+
+  --font-display: "Shippori Mincho B1", "Hiragino Mincho ProN", "Yu Mincho", YuMincho, "Noto Serif JP", "Noto Serif CJK JP", serif;
+  --font-body: "Zen Kaku Gothic New", "Hiragino Sans", "Hiragino Kaku Gothic ProN", "Yu Gothic", YuGothic, "Noto Sans JP", "Noto Sans CJK JP", Meiryo, sans-serif;
+  --t-xs: .75rem;
+  --t-s: .875rem;
+  --t-m: 1.25rem;
+
+  color-scheme: dark;
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { height: 100%; margin: 0; overscroll-behavior: none; }
+body {
+  background:
+    radial-gradient(85% 70% at 60% 46%, color-mix(in srgb, var(--ai) 50%, var(--yoru)), var(--yoru) 74%)
+    var(--yoru);
+  color: var(--kinari);
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: 1rem;
+  line-height: 1.5;
+  -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  -webkit-text-size-adjust: 100%;
+}
+p, h1, dl, dd { margin: 0; }
+
+/* ---------- 骨組み（縦長・小さい画面） ---------- */
+.app {
+  --kanji: clamp(2.25rem, 9vw, 3rem);
+  --kana: clamp(1rem, 4vw, 1.25rem);
+  height: 100%;
+  min-height: 430px;
+  max-width: 1560px;
+  margin-inline: auto;
+  padding: 16px 16px 14px;
+  display: grid;
+  grid-template:
+    "mast count" auto
+    "stage stage" minmax(0, 1fr)
+    "foot foot" auto
+    / minmax(0, 1fr) auto;
+  gap: 12px 16px;
+}
+
+.mast { grid-area: mast; align-self: end; min-width: 0; }
+.title {
+  display: flex;
+  align-items: baseline;
+  gap: .3em;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--kana);
+  line-height: 1;
+  white-space: nowrap;
+}
+.t-kanji { font-size: var(--kanji); letter-spacing: .06em; }
+.t-kana { letter-spacing: .1em; }
+.mark {
+  flex: none;
+  position: relative;
+  width: .95em;
+  height: .95em;
+  background: var(--shu);
+  border-radius: 2px;
+  rotate: -6deg;
+}
+.mark::after {
+  content: "";
+  position: absolute;
+  inset: 21%;
+  border: max(1.5px, .1em) solid var(--kinari);
+  border-radius: 50%;
+}
+.tagline {
+  margin-block-start: 9px;
+  font-size: var(--t-xs);
+  letter-spacing: .32em;
+  color: var(--nezu);
+  white-space: nowrap;
+}
+
+.count { grid-area: count; align-self: end; text-align: right; }
+.count-label {
+  margin-inline-end: -.22em;
+  font-size: var(--t-xs);
+  letter-spacing: .22em;
+  color: var(--nezu);
+}
+.count-num {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(3rem, 13vw, 4rem);
+  line-height: 1;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+
+.stage {
+  grid-area: stage;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(0, 1fr) auto;
+  gap: 10px;
+}
+.well {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+}
+.hint {
+  min-height: 1.5em;
+  text-align: center;
+  text-wrap: balance;
+  font-size: var(--t-xs);
+  letter-spacing: .12em;
+  color: var(--nezu);
+}
+.sr {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.foot {
+  grid-area: foot;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px 24px;
+}
+.stats { display: flex; gap: 22px; }
+.stat { display: flex; align-items: baseline; gap: 8px; }
+.stat dt { font-size: var(--t-xs); letter-spacing: .22em; color: var(--nezu); }
+.stat dd {
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: var(--t-m);
+  line-height: 1.2;
+  font-variant-numeric: tabular-nums lining-nums;
+}
+.stat small {
+  margin-inline-start: 3px;
+  font-family: var(--font-body);
+  font-weight: 500;
+  font-size: var(--t-xs);
+  color: var(--nezu);
+}
+.controls { display: flex; flex-wrap: wrap; gap: 8px; }
+.ctl {
+  min-height: 40px;
+  padding: 8px 12px;
+  border: 1px solid var(--hair);
+  border-radius: 2px;
+  background: transparent;
+  color: var(--kinari);
+  font: inherit;
+  font-size: var(--t-s);
+  letter-spacing: .04em;
+  cursor: pointer;
+  transition: border-color .15s, background-color .15s, color .15s;
+}
+.ctl:hover { border-color: var(--kinari); }
+.ctl.off { color: var(--nezu); }
+.ctl[aria-pressed="true"] {
+  background: var(--kinari);
+  border-color: var(--kinari);
+  color: var(--yoru);
+}
+.ctl:focus-visible, .b:focus-visible {
+  outline: 2px solid var(--kin);
+  outline-offset: 3px;
+}
+
+/* ---------- 気泡シート ---------- */
+.sheet {
+  --p: 48px;
+  --pad: calc(var(--p) * .3);
+  --cloth: var(--ai);
+  position: absolute;
+  inset: 0;
+  margin: auto;
+  width: calc(var(--p) * (var(--cols, 12) + .5) + var(--pad) * 2);
+  height: calc(var(--p) * ((var(--rows, 9) - 1) * .866 + 1) + var(--pad) * 2);
+  border-radius: calc(var(--p) * .14);
+  background:
+    linear-gradient(118deg, rgba(255, 255, 255, 0) 28%, rgba(255, 255, 255, .055) 44%, rgba(255, 255, 255, 0) 60%)
+    var(--cloth);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .07),
+    0 30px 60px -30px rgba(0, 0, 0, .7);
+  transition: opacity .3s ease, background-color .5s ease;
+}
+.sheet[data-cloth="1"] { --cloth: var(--nuno-1); }
+.sheet[data-cloth="2"] { --cloth: var(--nuno-2); }
+.sheet[data-cloth="3"] { --cloth: var(--nuno-3); }
+.sheet[data-cloth="4"] { --cloth: var(--nuno-4); }
+.sheet[data-cloth="5"] { --cloth: var(--nuno-5); }
+.well.done .sheet { opacity: .22; }
+
+/* ふくらんだ粒 */
+.b {
+  position: absolute;
+  left: calc(var(--pad) + var(--p) * (var(--c) + var(--o) * .5 + .05));
+  top: calc(var(--pad) + var(--p) * (var(--r) * .866 + .05));
+  width: calc(var(--p) * .9);
+  height: calc(var(--p) * .9);
+  padding: 0;
+  border: 0;
+  border-radius: 50%;
+  -webkit-appearance: none;
+  appearance: none;
+  cursor: pointer;
+  background:
+    radial-gradient(ellipse 30% 19% at 35% 25%, rgba(255, 255, 255, .9), rgba(255, 255, 255, 0)),
+    radial-gradient(circle at 38% 32%, rgba(255, 255, 255, .26), rgba(255, 255, 255, 0) 55%),
+    radial-gradient(circle at 67% 75%, rgba(255, 255, 255, .17), rgba(255, 255, 255, 0) 32%),
+    radial-gradient(circle, rgba(255, 255, 255, .08) 0 56%, rgba(0, 0, 0, .04) 74%, rgba(0, 0, 0, .3) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .13),
+    inset 0 calc(var(--p) * -.06) calc(var(--p) * .12) rgba(0, 0, 0, .28),
+    0 calc(var(--p) * .05) calc(var(--p) * .09) rgba(0, 0, 0, .5);
+}
+/* 金の粒。潰すと周りも道連れになる */
+.b.s {
+  background:
+    radial-gradient(ellipse 30% 19% at 35% 25%, rgba(255, 255, 255, .95), rgba(255, 255, 255, 0)),
+    radial-gradient(circle at 38% 32%, rgba(255, 246, 214, .4), rgba(255, 246, 214, 0) 55%),
+    radial-gradient(circle,
+      color-mix(in srgb, var(--kin) 85%, transparent) 0 40%,
+      color-mix(in srgb, var(--kin) 48%, transparent) 70%,
+      rgba(70, 45, 0, .55) 100%);
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--kin) 60%, transparent),
+    inset 0 calc(var(--p) * -.06) calc(var(--p) * .12) rgba(60, 40, 0, .4),
+    0 calc(var(--p) * .05) calc(var(--p) * .09) rgba(0, 0, 0, .5),
+    0 0 calc(var(--p) * .3) color-mix(in srgb, var(--kin) 32%, transparent);
+}
+@media (hover: hover) {
+  .sheet .b:not(.x):hover { filter: brightness(1.2); }
+}
+
+/* 新しいシートは左上からふくらむ */
+.sheet.enter .b {
+  animation: inflate .34s cubic-bezier(.3, 1.35, .5, 1) backwards;
+  animation-delay: calc((var(--r) + var(--c)) * 15ms);
+}
+@keyframes inflate { from { transform: scale(.35); opacity: 0; } }
+
+/* 潰れた粒。しわの向きは粒ごとに違う */
+.sheet .b.x {
+  cursor: default;
+  background:
+    linear-gradient(var(--a1, 40deg), rgba(255, 255, 255, 0) 43%, rgba(255, 255, 255, .11) 48.5%, rgba(0, 0, 0, .2) 51%, rgba(0, 0, 0, 0) 57%),
+    linear-gradient(var(--a2, 110deg), rgba(255, 255, 255, 0) 34%, rgba(255, 255, 255, .07) 40.5%, rgba(0, 0, 0, .15) 43%, rgba(0, 0, 0, 0) 49%),
+    radial-gradient(circle, rgba(0, 0, 0, .14) 0 62%, rgba(0, 0, 0, .3) 100%);
+  box-shadow:
+    inset 0 0 0 1px rgba(255, 255, 255, .08),
+    inset 0 calc(var(--p) * .03) calc(var(--p) * .07) rgba(0, 0, 0, .45);
+  transform: scale(.94);
+  animation: pop .22s cubic-bezier(.3, 1.5, .5, 1);
+}
+.sheet .b.s.x {
+  box-shadow:
+    inset 0 0 0 1px color-mix(in srgb, var(--kin) 55%, transparent),
+    inset 0 calc(var(--p) * .03) calc(var(--p) * .07) rgba(0, 0, 0, .45);
+}
+.sheet .b.x::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+  border: 1.5px solid rgba(255, 255, 255, .75);
+  border-radius: 50%;
+  opacity: 0;
+  pointer-events: none;
+  animation: ring .34s ease-out;
+}
+.sheet .b.s.x::after { border-color: var(--kin); animation-duration: .55s; }
+.sheet .b.x.q, .sheet .b.x.q::after { animation: none; }
+@keyframes pop { from { transform: scale(.76); } }
+@keyframes ring {
+  from { transform: scale(.7); opacity: .9; }
+  to { transform: scale(1.55); opacity: 0; }
+}
+
+/* ---------- 百八つ潰しきったときの印 ---------- */
+.seal {
+  position: absolute;
+  inset: 0;
+  z-index: 2;
+  display: grid;
+  place-content: center;
+  justify-items: center;
+  gap: clamp(12px, 3vmin, 22px);
+  pointer-events: none;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity .3s ease, visibility 0s linear .3s;
+}
+.seal.on { opacity: 1; visibility: visible; transition: opacity .1s ease; }
+.seal-mark {
+  display: grid;
+  place-items: center;
+  width: clamp(104px, 26vmin, 184px);
+  aspect-ratio: 1;
+  background: var(--shu);
+  color: var(--kinari);
+  border-radius: 5px;
+  rotate: -5deg;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(68px, 17vmin, 122px);
+  line-height: 1;
+  box-shadow:
+    inset 0 0 0 5px var(--shu),
+    inset 0 0 0 7px color-mix(in srgb, var(--kinari) 80%, transparent),
+    0 18px 50px rgba(0, 0, 0, .55);
+}
+.seal.on .seal-mark { animation: stamp .32s cubic-bezier(.2, 1.4, .4, 1) both; }
+@keyframes stamp { from { transform: scale(1.8); opacity: 0; } }
+.seal-line {
+  padding-inline: 16px;
+  font-family: var(--font-display);
+  font-weight: 800;
+  font-size: clamp(1rem, 2.8vmin, 1.375rem);
+  letter-spacing: .1em;
+  text-align: center;
+  text-shadow: 0 0 18px var(--yoru), 0 0 6px var(--yoru);
+}
+
+/* キーボードのない端末では、叩けと言わない */
+@media (hover: none) and (pointer: coarse) {
+  .kb { display: none; }
+}
+
+/* ---------- 広い画面: 左に縦書きの柱 ---------- */
+@media (min-width: 820px) and (min-aspect-ratio: 5/4) and (min-height: 700px) {
+  .app {
+    --kanji: clamp(4.25rem, 10vh, 5.5rem);
+    --kana: clamp(1.5rem, 3.6vh, 2rem);
+    grid-template:
+      "mast stage" auto
+      "count stage" minmax(0, 1fr)
+      "foot stage" auto
+      / 190px minmax(0, 1fr);
+    gap: 16px 40px;
+    padding: 28px 32px 24px;
+  }
+  .mast { writing-mode: vertical-rl; align-self: start; justify-self: start; }
+  .title { align-items: center; gap: .28em; }
+  .tagline { margin-block-start: 12px; font-size: var(--t-s); letter-spacing: .42em; }
+  .count { text-align: left; }
+  .count-label { margin-inline-end: 0; }
+  .count-num { margin-inline-start: -.04em; font-size: clamp(5rem, 13vh, 6.75rem); }
+  .foot {
+    flex-direction: column;
+    flex-wrap: nowrap;
+    align-items: stretch;
+    justify-content: flex-start;
+    gap: 14px;
+  }
+  .stats { flex-direction: column; gap: 6px; padding-block: 10px; border-block: 1px solid var(--hair); }
+  .stat { justify-content: space-between; }
+  .controls { display: grid; }
+  .ctl { min-height: 38px; }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .sheet.enter .b, .sheet .b.x, .sheet .b.x::after, .seal.on .seal-mark { animation: none; }
+  .sheet, .seal, .seal.on, .ctl { transition: none; }
+}
+</style>
+</head>
+<body>
+<main class="app">
+  <header class="mast">
+    <h1 class="title"><span class="t-kanji">無心</span><span class="t-kana">つぶし</span><span class="mark" aria-hidden="true"></span></h1>
+    <p class="tagline">考えない　つぶすだけ</p>
+  </header>
+
+  <div class="count">
+    <p class="count-label">残りの煩悩</p>
+    <p class="count-num" id="left">108</p>
+  </div>
+
+  <section class="stage" aria-label="気泡シート">
+    <div class="well" id="well">
+      <div class="sheet" id="sheet" role="group" aria-label="粒は百八つ。矢印キーで移動、スペースキーで潰せます"></div>
+      <div class="seal" id="seal" aria-hidden="true">
+        <span class="seal-mark">無</span>
+        <span class="seal-line">煩悩、百八つ。ぜんぶ潰れました。</span>
+      </div>
+    </div>
+    <p class="hint" id="hint">押す。なぞる。<span class="kb">キーを適当に叩く。</span>どれでも潰れます。</p>
+    <p class="sr" id="live" role="status"></p>
+  </section>
+
+  <footer class="foot">
+    <dl class="stats">
+      <div class="stat"><dt>悟り</dt><dd><span id="rounds">0</span><small>回</small></dd></div>
+      <div class="stat"><dt>累計</dt><dd><span id="total">0</span><small>粒</small></dd></div>
+    </dl>
+    <div class="controls">
+      <button type="button" class="ctl" id="sound">音 あり</button>
+      <button type="button" class="ctl" id="auto" aria-pressed="false">自動で潰す</button>
+      <button type="button" class="ctl" id="fresh">シートを替える</button>
+    </div>
+  </footer>
+</main>
+
+<script>
+(() => {
+  'use strict';
+
+  const N = 108;       // 1枚の粒数。煩悩の数
+  const ROW = 0.866;   // 千鳥に並べたときの行間（粒の間隔に対する比）
+  const PAD = 0.3;     // シートの縁（同じく比）。CSS の --pad と揃える
+  const LAYOUTS = [[9, 12], [12, 9], [6, 18], [18, 6], [4, 27], [27, 4]];
+  const CLOTHS = 6;
+  const KEY = 'mushin-tsubushi';
+  const DONE = '煩悩、百八つ。ぜんぶ潰れました。';
+  const AGAIN = 'また湧いてきました。';
+
+  const $ = id => document.getElementById(id);
+  const well = $('well'), sheet = $('sheet'), seal = $('seal'), hint = $('hint'), live = $('live');
+  const elLeft = $('left'), elRounds = $('rounds'), elTotal = $('total');
+  const btnSound = $('sound'), btnAuto = $('auto'), btnFresh = $('fresh');
+  const hintHome = hint.innerHTML;
+  const fmt = new Intl.NumberFormat('ja-JP');
+
+  // ページが差し替わっても続きから始められるよう、覚えておくものはここに集める
+  const state = { total: 0, rounds: 0, sound: true, cloth: -1, popped: [], special: [] };
+
+  const cells = [];
+  let pos = [];
+  let cols = 0, rows = 0, pitch = 48;
+  let left = N, gen = 0, busy = false, skipAt = 0;
+  let doneTimer = 0, hintTimer = 0, saveTimer = 0, autoTimer = 0;
+  let cursor = -1, focusIdx = 0, lastKey = 0, auto = false;
+  let origin = null;
+  const strokes = new Map();
+
+  /* ---------- 音 ---------- */
+  let ctx = null, master = null, noise = null, wokeAt = 0;
+
+  // 音は必ず操作のなかで起こす。断られたら黙って続ける
+  function wake() {
+    if (!state.sound) return;
+    try {
+      if (!ctx) {
+        const AC = window.AudioContext || window.webkitAudioContext;
+        if (!AC) return;
+        ctx = new AC();
+        master = ctx.createGain();
+        master.gain.value = 0.7;
+        master.connect(ctx.destination);
+        const len = Math.floor(ctx.sampleRate * 0.25);
+        noise = ctx.createBuffer(1, len, ctx.sampleRate);
+        const d = noise.getChannelData(0);
+        for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+      }
+      if (ctx.state !== 'running') {
+        wokeAt = performance.now();
+        const p = ctx.resume();
+        if (p && p.catch) p.catch(() => {});
+      }
+    } catch (e) {
+      console.debug('音を用意できませんでした', e);
+      ctx = null;
+    }
+  }
+  const audible = () => state.sound && ctx && (ctx.state === 'running' || performance.now() - wokeAt < 250);
+
+  function popSound(i, soft) {
+    if (!audible()) return;
+    try {
+      const t = ctx.currentTime;
+      const out = ctx.createGain();
+      out.gain.value = soft ? 0.55 : 1;
+      if (ctx.createStereoPanner) {
+        const pan = ctx.createStereoPanner();
+        pan.pan.value = ((pos[i].ux + 0.5) / (cols + 0.5) * 2 - 1) * 0.7;
+        out.connect(pan).connect(master);
+      } else {
+        out.connect(master);
+      }
+      // 破裂のパチッ
+      const dur = 0.05 + Math.random() * 0.04;
+      const src = ctx.createBufferSource();
+      src.buffer = noise;
+      src.playbackRate.value = 0.75 + Math.random() * 0.7;
+      const band = ctx.createBiquadFilter();
+      band.type = 'bandpass';
+      band.frequency.value = 1500 + Math.random() * 1700;
+      band.Q.value = 0.8;
+      const g = ctx.createGain();
+      g.gain.setValueAtTime(0.0001, t);
+      g.gain.exponentialRampToValueAtTime(0.8, t + 0.002);
+      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
+      src.connect(band).connect(g).connect(out);
+      src.start(t, Math.random() * 0.1, dur + 0.03);
+      // 空気が抜けるポッ
+      const o = ctx.createOscillator();
+      o.type = 'sine';
+      o.frequency.setValueAtTime(300 + Math.random() * 160, t);
+      o.frequency.exponentialRampToValueAtTime(80, t + 0.07);
+      const og = ctx.createGain();
+      og.gain.setValueAtTime(0.4, t);
+      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      o.connect(og).connect(out);
+      o.start(t);
+      o.stop(t + 0.1);
+    } catch (e) {
+      console.debug('音を出せませんでした', e);
+    }
+  }
+
+  // 鐘。倍音を少しずらして、うなりを作る
+  function bell() {
+    if (!audible()) return;
+    try {
+      const t = ctx.currentTime + 0.03;
+      const f = 147;
+      const out = ctx.createGain();
+      out.gain.value = 0.5;
+      out.connect(master);
+      const parts = [[0.5, 0.2, 7], [1, 0.5, 6.5], [1.007, 0.32, 6.5], [1.19, 0.2, 4.5], [1.5, 0.14, 3.6],
+                     [2, 0.2, 3.2], [2.52, 0.1, 2.2], [3.01, 0.07, 1.6], [4.1, 0.04, 1.1]];
+      for (const [mult, amp, len] of parts) {
+        const o = ctx.createOscillator();
+        const g = ctx.createGain();
+        o.type = 'sine';
+        o.frequency.value = f * mult;
+        g.gain.setValueAtTime(0.0001, t);
+        g.gain.exponentialRampToValueAtTime(amp, t + 0.012);
+        g.gain.exponentialRampToValueAtTime(0.0001, t + len);
+        o.connect(g).connect(out);
+        o.start(t);
+        o.stop(t + len + 0.05);
+      }
+      const hitSrc = ctx.createBufferSource();
+      hitSrc.buffer = noise;
+      const low = ctx.createBiquadFilter();
+      low.type = 'lowpass';
+      low.frequency.value = 700;
+      const hg = ctx.createGain();
+      hg.gain.setValueAtTime(0.5, t);
+      hg.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
+      hitSrc.connect(low).connect(hg).connect(out);
+      hitSrc.start(t, 0, 0.12);
+    } catch (e) {
+      console.debug('鐘を鳴らせませんでした', e);
+    }
+  }
+
+  /* ---------- 記録 ---------- */
+  // 累計だけは次に開いたときも残す。保存できない環境ではその場かぎりで動く
+  function flush() {
+    clearTimeout(saveTimer);
+    saveTimer = 0;
+    try {
+      localStorage.setItem(KEY, JSON.stringify({ total: state.total, rounds: state.rounds, sound: state.sound }));
+    } catch (e) { /* 保存できなくても遊べる */ }
+  }
+  function save() {
+    if (!saveTimer) saveTimer = setTimeout(flush, 800);
+  }
+
+  /* ---------- 表示 ---------- */
+  function hud() {
+    elLeft.textContent = left;
+    elRounds.textContent = fmt.format(state.rounds);
+    elTotal.textContent = fmt.format(state.total);
+  }
+  function say(msg, ms) {
+    clearTimeout(hintTimer);
+    hint.textContent = msg;
+    live.textContent = msg;
+    hintTimer = setTimeout(() => { hint.innerHTML = hintHome; }, ms);
+  }
+  function syncSound() {
+    btnSound.textContent = state.sound ? '音 あり' : '音 なし';
+    btnSound.classList.toggle('off', !state.sound);
+  }
+
+  /* ---------- シート ---------- */
+  function build() {
+    const frag = document.createDocumentFragment();
+    for (let i = 0; i < N; i++) {
+      const el = document.createElement('button');
+      el.type = 'button';
+      el.id = 'b' + i;
+      el.className = 'b';
+      el.dataset.i = i;
+      el.tabIndex = i === 0 ? 0 : -1;
+      frag.appendChild(el);
+      cells.push(el);
+    }
+    sheet.appendChild(frag);
+  }
+
+  // 置き場の広さから、108 粒がいちばん大きく並ぶ列数と粒の間隔を決める
+  function layout() {
+    const w = well.clientWidth, h = well.clientHeight;
+    let c = 12, r = 9, p = 48;
+    if (w > 0 && h > 0) {
+      p = 0;
+      for (const [lc, lr] of LAYOUTS) {
+        const q = Math.min(w / (lc + 0.5 + PAD * 2), h / ((lr - 1) * ROW + 1 + PAD * 2));
+        if (q > p) { p = q; c = lc; r = lr; }
+      }
+      p = Math.max(16, Math.min(88, Math.floor(p * 10) / 10));
+    }
+    pitch = p;
+    origin = null;
+    sheet.style.setProperty('--p', p + 'px');
+    if (c !== cols || r !== rows) {
+      cols = c;
+      rows = r;
+      sheet.style.setProperty('--cols', c);
+      sheet.style.setProperty('--rows', r);
+      pos = cells.map((el, i) => {
+        const rr = Math.floor(i / c), cc = i % c, o = rr & 1;
+        el.style.setProperty('--c', cc);
+        el.style.setProperty('--r', rr);
+        el.style.setProperty('--o', o);
+        return { r: rr, c: cc, ux: cc + o * 0.5, uy: rr * ROW };
+      });
+    }
+  }
+
+  const gap = (i, j) => Math.hypot(pos[i].ux - pos[j].ux, pos[i].uy - pos[j].uy);
+
+  function pickSpecial() {
+    const a = Math.floor(Math.random() * N);
+    let b = a;
+    for (let tries = 0; tries < 80; tries++) {
+      const k = Math.floor(Math.random() * N);
+      if (gap(a, k) >= 4.5) { b = k; break; }
+    }
+    return b === a ? [a] : [a, b];
+  }
+
+  // state の中身をそのまま画面に写す
+  function paint(animate) {
+    sheet.dataset.cloth = state.cloth;
+    const gold = new Set(state.special);
+    left = N;
+    cells.forEach((el, i) => {
+      const x = state.popped[i] === 1;
+      if (x) left--;
+      el.className = 'b' + (gold.has(i) ? ' s' : '') + (x ? ' x q' : '');
+      el.setAttribute('aria-pressed', String(x));
+      el.setAttribute('aria-label', (gold.has(i) ? '金の粒 ' : '粒 ') + (i + 1));
+      el.style.setProperty('--a1', Math.floor(Math.random() * 180) + 'deg');
+      el.style.setProperty('--a2', Math.floor(Math.random() * 180) + 'deg');
+    });
+    sheet.classList.remove('enter');
+    if (animate) {
+      void sheet.offsetWidth;
+      sheet.classList.add('enter');
+      const g = gen;
+      setTimeout(() => { if (g === gen) sheet.classList.remove('enter'); }, 900);
+    }
+    hud();
+  }
+
+  function newSheet(animate) {
+    gen++;
+    state.popped = new Array(N).fill(0);
+    state.special = pickSpecial();
+    state.cloth = (state.cloth + 1) % CLOTHS;
+    cursor = -1;
+    paint(animate);
+  }
+
+  /* ---------- 潰す ---------- */
+  function pop(i, chained) {
+    if (busy || state.popped[i]) return;
+    state.popped[i] = 1;
+    left--;
+    state.total++;
+    if (!chained) cursor = i;
+    const el = cells[i];
+    el.classList.remove('q');
+    el.classList.add('x');
+    el.setAttribute('aria-pressed', 'true');
+    popSound(i, chained);
+    if (navigator.vibrate) {
+      try { navigator.vibrate(chained ? 4 : 8); } catch (e) { /* 震えなくても困らない */ }
+    }
+    hud();
+    save();
+    if (state.special.includes(i)) chain(i);
+    if (left === 0) complete();
+  }
+
+  // 金の粒は、まわり二周ぶんを波のように道連れにする
+  function chain(i) {
+    const g = gen;
+    for (let j = 0; j < N; j++) {
+      if (j === i || state.popped[j]) continue;
+      const d = gap(i, j);
+      if (d <= 2.05) setTimeout(() => { if (g === gen) pop(j, true); }, 45 + d * 75);
+    }
+  }
+
+  function complete() {
+    busy = true;
+    strokes.clear();
+    state.rounds++;
+    hud();
+    flush();
+    skipAt = performance.now() + 700;
+    well.classList.add('done');
+    seal.classList.add('on');
+    live.textContent = DONE;
+    bell();
+    doneTimer = setTimeout(nextSheet, 2600);
+  }
+
+  function nextSheet() {
+    clearTimeout(doneTimer);
+    well.classList.remove('done');
+    seal.classList.remove('on');
+    busy = false;
+    newSheet(true);
+    say(AGAIN, 3200);
+  }
+
+  // 次に潰す粒。さっき潰したあたりから、ふらふらと近いものを選ぶ
+  function nextTarget() {
+    const rest = [];
+    for (let i = 0; i < N; i++) if (!state.popped[i]) rest.push(i);
+    if (!rest.length) return -1;
+    if (cursor < 0) return rest[Math.floor(Math.random() * rest.length)];
+    rest.sort((a, b) => gap(cursor, a) - gap(cursor, b));
+    const roll = Math.random();
+    const pick = roll < 0.6 ? 0 : roll < 0.85 ? 1 : 2;
+    return rest[Math.min(pick, rest.length - 1)];
+  }
+
+  function autoStep() {
+    if (!auto) return;
+    if (!busy) {
+      const j = nextTarget();
+      if (j >= 0) pop(j);
+    }
+    autoTimer = setTimeout(autoStep, 150 + Math.random() * 140);
+  }
+
+  /* ---------- 指とマウス ---------- */
+  // 画面上の点がどの粒の上かを、並びの計算だけで求める（速くなぞっても取りこぼさない）
+  function hit(x, y) {
+    if (!origin) {
+      const box = sheet.getBoundingClientRect();
+      origin = { x: box.left, y: box.top };
+    }
+    const lx = (x - origin.x) / pitch - PAD;
+    const ly = (y - origin.y) / pitch - PAD;
+    const r0 = Math.round((ly - 0.5) / ROW);
+    let best = -1, bestD = 0.504;
+    for (let r = r0 - 1; r <= r0 + 1; r++) {
+      if (r < 0 || r >= rows) continue;
+      const shift = (r & 1) * 0.5;
+      const c0 = Math.round(lx - 0.5 - shift);
+      for (let c = c0 - 1; c <= c0 + 1; c++) {
+        if (c < 0 || c >= cols) continue;
+        const d = Math.hypot(lx - (c + shift + 0.5), ly - (r * ROW + 0.5));
+        if (d < bestD) { bestD = d; best = r * cols + c; }
+      }
+    }
+    return best;
+  }
+
+  function drag(x0, y0, x1, y1) {
+    const steps = Math.max(1, Math.ceil(Math.hypot(x1 - x0, y1 - y0) / (pitch * 0.3)));
+    for (let s = 1; s <= steps; s++) {
+      const t = s / steps;
+      const i = hit(x0 + (x1 - x0) * t, y0 + (y1 - y0) * t);
+      if (i >= 0) pop(i);
+    }
+  }
+
+  function roam(i, focus) {
+    cells[focusIdx].tabIndex = -1;
+    focusIdx = i;
+    cells[i].tabIndex = 0;
+    if (focus) cells[i].focus();
+  }
+
+  function bind() {
+    if ('ResizeObserver' in window) new ResizeObserver(() => layout()).observe(well);
+    window.addEventListener('resize', layout);
+    window.addEventListener('scroll', () => { origin = null; }, true);
+
+    well.addEventListener('pointerdown', e => {
+      if (e.pointerType === 'mouse' && e.button !== 0) return;
+      wake();
+      e.preventDefault();
+      if (busy) {
+        if (performance.now() < skipAt) return;
+        nextSheet();
+      }
+      origin = null;
+      strokes.set(e.pointerId, { x: e.clientX, y: e.clientY });
+      const i = hit(e.clientX, e.clientY);
+      if (i >= 0) pop(i);
+    });
+    window.addEventListener('pointermove', e => {
+      const s = strokes.get(e.pointerId);
+      if (!s) return;
+      if (e.pointerType === 'mouse' && !(e.buttons & 1)) { strokes.delete(e.pointerId); return; }
+      drag(s.x, s.y, e.clientX, e.clientY);
+      s.x = e.clientX;
+      s.y = e.clientY;
+    });
+    window.addEventListener('pointerup', e => { strokes.delete(e.pointerId); wake(); });
+    window.addEventListener('pointercancel', e => { strokes.delete(e.pointerId); });
+
+    // 読み上げソフトなど、押下ではなくクリックだけが届く操作のため
+    sheet.addEventListener('click', e => {
+      const el = e.target.closest('.b');
+      if (el) { wake(); pop(Number(el.dataset.i)); }
+    });
+    sheet.addEventListener('focusin', e => {
+      const el = e.target.closest('.b');
+      if (el) roam(Number(el.dataset.i), false);
+    });
+
+    document.addEventListener('keydown', e => {
+      if (e.ctrlKey || e.metaKey || e.altKey) return;
+      const k = e.key;
+      const at = e.target instanceof Element ? e.target : document.body;
+      const onControl = !!at.closest('.controls');
+
+      if (k.startsWith('Arrow')) {
+        if (onControl) return;
+        e.preventDefault();
+        if (!at.classList.contains('b')) { roam(focusIdx, true); return; }
+        let r = pos[focusIdx].r, c = pos[focusIdx].c;
+        if (k === 'ArrowLeft') c--; else if (k === 'ArrowRight') c++; else if (k === 'ArrowUp') r--; else r++;
+        if (r >= 0 && r < rows && c >= 0 && c < cols) roam(r * cols + c, true);
+        return;
+      }
+
+      const tap = k === ' ' || k === 'Enter';
+      if (!tap && k.length !== 1 && k !== 'Backspace' && k !== 'Process' && k !== 'Dead') return;
+      if (tap && onControl) return;
+      e.preventDefault();
+      wake();
+      const now = performance.now();
+      if (busy) {
+        if (now >= skipAt && !e.repeat) nextSheet();
+        return;
+      }
+      if (e.repeat && now - lastKey < 70) return;
+      lastKey = now;
+      if (tap && at.classList.contains('b') && !state.popped[Number(at.dataset.i)]) {
+        pop(Number(at.dataset.i));
+        return;
+      }
+      const j = nextTarget();
+      if (j >= 0) pop(j);
+    });
+
+    btnSound.addEventListener('click', () => {
+      state.sound = !state.sound;
+      syncSound();
+      if (state.sound) {
+        wake();
+      } else if (ctx && ctx.state === 'running') {
+        const p = ctx.suspend();
+        if (p && p.catch) p.catch(() => {});
+      }
+      flush();
+    });
+    btnAuto.addEventListener('click', () => {
+      auto = !auto;
+      btnAuto.setAttribute('aria-pressed', String(auto));
+      clearTimeout(autoTimer);
+      if (auto) { wake(); autoStep(); }
+    });
+    btnFresh.addEventListener('click', () => {
+      wake();
+      if (busy) nextSheet(); else newSheet(true);
+    });
+
+    window.addEventListener('pagehide', flush);
+    document.addEventListener('visibilitychange', () => { if (document.hidden) flush(); });
+  }
+
+  /* ---------- はじまり ---------- */
+  function start(saved) {
+    try {
+      const s = JSON.parse(localStorage.getItem(KEY) || 'null');
+      if (s && typeof s === 'object') {
+        state.total = Math.max(0, Math.floor(Number(s.total)) || 0);
+        state.rounds = Math.max(0, Math.floor(Number(s.rounds)) || 0);
+        state.sound = s.sound !== false;
+      }
+    } catch (e) { /* 記録が読めなければ 0 から */ }
+
+    let resume = false;
+    if (saved && typeof saved === 'object') {
+      if (Number.isFinite(saved.total)) state.total = Math.max(state.total, saved.total);
+      if (Number.isFinite(saved.rounds)) state.rounds = Math.max(state.rounds, saved.rounds);
+      if (typeof saved.sound === 'boolean') state.sound = saved.sound;
+      if (Array.isArray(saved.popped) && saved.popped.length === N && Array.isArray(saved.special)) {
+        state.popped = saved.popped.map(v => (v ? 1 : 0));
+        state.special = saved.special.filter(v => Number.isInteger(v) && v >= 0 && v < N);
+        state.cloth = Number.isInteger(saved.cloth) ? ((saved.cloth % CLOTHS) + CLOTHS) % CLOTHS : 0;
+        resume = state.popped.includes(0);
+      }
+    }
+
+    build();
+    layout();
+    if (resume) paint(false); else newSheet(false);
+    syncSound();
+    bind();
+  }
+
+  const hot = window.claude && window.claude.hot;
+  if (hot && typeof hot.snapshot === 'function') hot.snapshot(() => state);
+  if (hot && typeof hot.ready === 'function') hot.ready(start);
+  else start((hot && hot.data) || {});
+})();
+</script>
+</body>
+</html>
