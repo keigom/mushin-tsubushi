@@ -481,7 +481,7 @@ p, h1, dl, dd { margin: 0; }
   const strokes = new Map();
 
   /* ---------- 音 ---------- */
-  let ctx = null, master = null, noise = null, wokeAt = 0, queued = 0;
+  let ctx = null, master = null, noise = null, voices = null, lastVoice = -1, wokeAt = 0, queued = 0;
 
   // iPhone / iPad は、消音モードだと Web Audio を鳴らさない。
   // 音を「あり」にしている間だけ再生用の扱いに切り替えて、消音モードでも鳴るようにする（iOS 17 以降）。
@@ -506,12 +506,16 @@ p, h1, dl, dd { margin: 0; }
         if (!AC) return;
         ctx = new AC();
         master = ctx.createGain();
-        master.gain.value = 0.7;
+        master.gain.value = 0.8;
         master.connect(ctx.destination);
         const len = Math.floor(ctx.sampleRate * 0.25);
         noise = ctx.createBuffer(1, len, ctx.sampleRate);
         const d = noise.getChannelData(0);
         for (let i = 0; i < len; i++) d[i] = Math.random() * 2 - 1;
+        voices = { small: [], big: [] };
+        addVoice(false);
+        addVoice(false);
+        setTimeout(fillVoices, 30);
       }
       if (ctx.state !== 'running') {
         wokeAt = performance.now();
@@ -521,6 +525,7 @@ p, h1, dl, dd { margin: 0; }
     } catch (e) {
       console.debug('音を用意できませんでした', e);
       ctx = null;
+      voices = null;
     }
   }
   // 鳴らせる状態か。起こしている最中（指を離すまで）は1音だけ予約して、あとでまとめて鳴るのを防ぐ
@@ -531,45 +536,174 @@ p, h1, dl, dd { margin: 0; }
     return false;
   }
 
-  function popSound(i, soft) {
-    if (!audible()) return;
+  /* POP-SYNTH-BEGIN */
+  // 粒が潰れる音を、録音を使わずに計算で作る。
+  // 実物の気泡シートの音は、0.3ミリ秒もかからず立ち上がる鋭い破裂で、1〜2ミリ秒でほぼ鳴り終わり、
+  // そのあと部屋の響きとフィルムの名残が 0.1 秒ほど小さく続く。成分は 2〜12kHz が中心で、500Hz より下はほとんどない。
+  // これに合わせて「破裂」「近くの面からの跳ね返り」「名残」を重ねる。big は粒の大きいシートの、低めで太い音。
+  // rnd は 0〜1 の乱数を返す関数。呼ぶたびに少しずつ違う音になる。
+  function synthPop(sr, rnd, big) {
+    const n = Math.floor(sr * 0.14);
+    const between = (a, b) => a + (b - a) * rnd();
+    const gain = dB => Math.pow(10, dB / 20);
+    const hiss = () => rnd() * 2 - 1;
+    const top = sr * 0.45;
+
+    // 2次のフィルター。配列をその場で書き換える
+    function biquad(x, type, freq, q, dB) {
+      const w = 2 * Math.PI * Math.min(freq, top) / sr, cs = Math.cos(w), al = Math.sin(w) / (2 * q);
+      let b0, b1, b2, a0, a1, a2;
+      if (type === 'peak') {
+        const A = Math.pow(10, dB / 40);
+        b0 = 1 + al * A; b1 = -2 * cs; b2 = 1 - al * A; a0 = 1 + al / A; a1 = -2 * cs; a2 = 1 - al / A;
+      } else if (type === 'high') {
+        b0 = (1 + cs) / 2; b1 = -(1 + cs); b2 = (1 + cs) / 2; a0 = 1 + al; a1 = -2 * cs; a2 = 1 - al;
+      } else {
+        b0 = (1 - cs) / 2; b1 = 1 - cs; b2 = (1 - cs) / 2; a0 = 1 + al; a1 = -2 * cs; a2 = 1 - al;
+      }
+      let x1 = 0, x2 = 0, y1 = 0, y2 = 0;
+      for (let i = 0; i < x.length; i++) {
+        const v = x[i], y = (b0 * v + b1 * x1 + b2 * x2 - a1 * y1 - a2 * y2) / a0;
+        x2 = x1; x1 = v; y2 = y1; y1 = y; x[i] = y;
+      }
+    }
+    // 1次のハイパス。高い音ほど強くする
+    function tilt(x, freq) {
+      const a = 1 / (1 + 2 * Math.PI * Math.min(freq, top) / sr);
+      let px = 0, py = 0;
+      for (let i = 0; i < x.length; i++) { const v = x[i]; py = a * (py + v - px); px = v; x[i] = py; }
+    }
+    const rms = (x, from, to) => {
+      const a = Math.round(sr * from), b = Math.min(x.length, Math.round(sr * to));
+      let e = 0;
+      for (let i = a; i < b; i++) e += x[i] * x[i];
+      return Math.sqrt(e / Math.max(1, b - a));
+    };
+    const peakOf = x => { let p = 0; for (let i = 0; i < x.length; i++) p = Math.max(p, Math.abs(x[i])); return p; };
+
+    // 1次のローパス。高い音をなだらかに落とす
+    function soften(x, freq) {
+      const b = 1 - Math.exp(-2 * Math.PI * Math.min(freq, top) / sr);
+      let y = 0;
+      for (let i = 0; i < x.length; i++) { y += b * (x[i] - y); x[i] = y; }
+    }
+
+    // この粒の音色。実物は 1〜5kHz がほぼ平らで、その下と上がなだらかに落ちる。大きい粒は低い側まで平らで、上が早く落ちる
+    const bright = rnd();
+    const floor = big ? between(200, 600) : 450 + 350 * bright;
+    const ceil = big ? between(5000, 7500) : 6000 + 6000 * bright;
+    const cap = big ? between(12000, 15000) : 16000;
+    const quirks = [
+      [big ? between(1050, 1400) : between(800, 1050), between(2, 3), big ? between(-1, 1) : between(1, 4)],            // 胴鳴り
+      [between(1600, 2400), between(0.9, 1.4), big ? between(-3, -1) : between(-5, -2)],                               // 中域のくぼみ
+      [big ? between(3100, 4200) : between(3400, 4600), between(1.2, 2), big ? between(4, 6.5) : between(1.5, 4)],     // 芯
+      [1200 * Math.pow(10000 / 1200, rnd()), between(2, 4), between(-4, 4)],  // 粒ごとのくせ
+      [1200 * Math.pow(10000 / 1200, rnd()), between(2, 4), between(-4, 4)],
+    ];
+    function voice(x, dull) {
+      biquad(x, 'high', 100, 0.7);
+      tilt(x, floor);
+      soften(x, ceil * (dull ? 0.7 : 1));
+      for (const [f, q, g] of quirks) biquad(x, 'peak', f, q, g);
+      biquad(x, 'low', cap, 0.6);
+    }
+
+    // 破裂: 圧力の山と戻り、それに重なるごく短い雑音。雑音は一瞬で落ちる分と、1〜2ミリ秒かけて落ちる分の二段
+    const click = new Float32Array(n);
+    const quick = sr * (big ? between(0.0004, 0.0007) : between(0.0003, 0.0005));
+    const slow = sr * (big ? between(0.0016, 0.0026) : between(0.0015, 0.0023));
+    const linger = big ? between(0.5, 0.8) : between(0.6, 0.9);
+    const up = Math.max(2, Math.round(sr * (big ? between(0.00015, 0.0003) : between(0.00008, 0.00016))));
+    for (let i = 0; i < up; i++) click[i] += Math.sin(Math.PI * (i + 0.5) / up);
+    for (let i = 0; i < up * 2; i++) click[up + i] -= 0.45 * Math.sin(Math.PI * (i + 0.5) / (up * 2));
+    const grit = between(0.7, 1.1);
+    for (let i = 0; i < n && i < slow * 12; i++) click[i] += grit * hiss() * (Math.exp(-i / quick) + linger * Math.exp(-i / slow));
+    voice(click, false);
+    const out = Float32Array.from(click);
+
+    // 近くの面からの跳ね返りを2つ
+    const bounces = [
+      [between(0.003, 0.0065), between(-14, -9), between(5000, 8000)],
+      [between(0.009, 0.016), between(-21, -16), between(3500, 6000)],
+    ];
+    for (const [late, level, soft] of bounces) {
+      const echo = Float32Array.from(click);
+      biquad(echo, 'low', soft, 0.7);
+      const d = Math.round(sr * late), g = gain(level);
+      for (let i = 0; i + d < n; i++) out[i + d] += g * echo[i];
+    }
+
+    // 名残: 部屋の響きと、フィルムが戻るときのかすかなパリッ
+    const tail = new Float32Array(n);
+    const fade = between(0.03, 0.038), from = Math.round(sr * 0.0015);
+    for (let i = from; i < n; i++) {
+      const t = (i - from) / sr;
+      tail[i] = hiss() * Math.exp(-t / fade) * (1 - Math.exp(-t / 0.002));
+    }
+    for (let c = Math.floor(rnd() * 3); c > 0; c--) {
+      const at = Math.round(sr * between(0.008, 0.045));
+      const size = between(2, 5) * Math.exp(-(at - from) / sr / fade);
+      for (let k = 0; k < sr * 0.002 && at + k < n; k++) tail[at + k] += size * hiss() * Math.exp(-k / (sr * 0.0003));
+    }
+    voice(tail, true);
+    const share = rms(click, 0, 0.001) * gain(between(-23, -19)) / Math.max(1e-9, rms(tail, 0.004, 0.008));
+    for (let i = 0; i < n; i++) out[i] += share * tail[i];
+
+    // 大きい粒は、空気の抜ける低い「ポ」がわずかに混じる
+    if (big) {
+      const f = between(280, 420), amp = between(0.05, 0.12) * peakOf(click);
+      for (let i = 0; i < n && i < sr * 0.03; i++) out[i] += amp * Math.sin(2 * Math.PI * f * i / sr) * Math.exp(-i / (sr * 0.004));
+    }
+
+    const peak = peakOf(out), end = Math.round(sr * 0.006);
+    for (let i = 0; i < n; i++) out[i] *= 0.95 / peak * Math.min(1, (n - i) / end);
+    return out;
+  }
+  /* POP-SYNTH-END */
+
+  // 開くたびに違う音を何種類か作っておき、潰すたびにその中から選ぶ。
+  // 最初の1音を待たせないよう、はじめは少しだけ作り、残りは合間に足していく
+  function addVoice(big) {
+    const data = synthPop(ctx.sampleRate, Math.random, big);
+    const buf = ctx.createBuffer(1, data.length, ctx.sampleRate);
+    buf.getChannelData(0).set(data);
+    (big ? voices.big : voices.small).push(buf);
+  }
+  function fillVoices() {
+    if (!ctx || !voices) return;
     try {
-      const t = ctx.currentTime;
-      const out = ctx.createGain();
-      out.gain.value = soft ? 0.55 : 1;
+      if (voices.big.length < 1) addVoice(true);
+      else if (voices.small.length < 12) addVoice(false);
+      else if (voices.big.length < 4) addVoice(true);
+      else return;
+      setTimeout(fillVoices, 30);
+    } catch (e) {
+      console.debug('音を作り足せませんでした', e);
+    }
+  }
+
+  function popSound(i, soft) {
+    if (!audible() || !voices) return;
+    try {
+      const gold = state.special.includes(i) && voices.big.length > 0;
+      const list = gold ? voices.big : voices.small;
+      let k = Math.floor(Math.random() * list.length);
+      if (k === lastVoice) k = (k + 1) % list.length;
+      lastVoice = k;
+      const src = ctx.createBufferSource();
+      src.buffer = list[k];
+      src.playbackRate.value = 0.93 + Math.random() * 0.14;
+      const g = ctx.createGain();
+      g.gain.value = (gold ? 1 : soft ? 0.5 : 0.85) * (0.8 + Math.random() * 0.2);
+      src.connect(g);
       if (ctx.createStereoPanner) {
         const pan = ctx.createStereoPanner();
         pan.pan.value = ((pos[i].ux + 0.5) / (cols + 0.5) * 2 - 1) * 0.7;
-        out.connect(pan).connect(master);
+        g.connect(pan).connect(master);
       } else {
-        out.connect(master);
+        g.connect(master);
       }
-      // 破裂のパチッ
-      const dur = 0.05 + Math.random() * 0.04;
-      const src = ctx.createBufferSource();
-      src.buffer = noise;
-      src.playbackRate.value = 0.75 + Math.random() * 0.7;
-      const band = ctx.createBiquadFilter();
-      band.type = 'bandpass';
-      band.frequency.value = 1500 + Math.random() * 1700;
-      band.Q.value = 0.8;
-      const g = ctx.createGain();
-      g.gain.setValueAtTime(0.0001, t);
-      g.gain.exponentialRampToValueAtTime(0.8, t + 0.002);
-      g.gain.exponentialRampToValueAtTime(0.0001, t + dur);
-      src.connect(band).connect(g).connect(out);
-      src.start(t, Math.random() * 0.1, dur + 0.03);
-      // 空気が抜けるポッ
-      const o = ctx.createOscillator();
-      o.type = 'sine';
-      o.frequency.setValueAtTime(300 + Math.random() * 160, t);
-      o.frequency.exponentialRampToValueAtTime(80, t + 0.07);
-      const og = ctx.createGain();
-      og.gain.setValueAtTime(0.4, t);
-      og.gain.exponentialRampToValueAtTime(0.0001, t + 0.09);
-      o.connect(og).connect(out);
-      o.start(t);
-      o.stop(t + 0.1);
+      src.start();
     } catch (e) {
       console.debug('音を出せませんでした', e);
     }
